@@ -208,7 +208,7 @@ Bandwidth:平均每秒传输数据量(bytes/s)`,
 	cmd.Flags().StringVarP(&secretKey, "secret_key", "s", "", "specify the secret_key")
 	cmd.Flags().StringVarP(&sessionToken, "session_token", "", "", "specify the session_token")
 	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 10000, "upload object num")
-	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 1*1024*1024*1024, "upload object max size")
+	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 1*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
 	cmd.Flags().BoolVarP(&isOutputErr, "err", "e", false, "output err")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
