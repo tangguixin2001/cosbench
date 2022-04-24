@@ -7,18 +7,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/cobra"
 	"log"
-	"math/rand"
-	"strconv"
 	"sync"
 	"time"
 )
 
 func buildCOSRateCmd(parentCmd *cobra.Command) {
-
-	const (
-		OBJECTNAME = "cosbench-object"
-	)
-
 	var (
 		endpoints    string
 		region       string
@@ -26,7 +19,8 @@ func buildCOSRateCmd(parentCmd *cobra.Command) {
 		secretKey    string
 		sessionToken string
 		objNum       uint64
-		objSize      uint64
+		objMaxSize   uint64
+		objMinSize   uint64
 		isOutputErr  bool
 		bucketName   string
 		notCreate    bool
@@ -42,10 +36,9 @@ Avg-ResTime:平均响应时间(ms)
 Throughput:每秒操作数
 Bandwidth:平均每秒传输数据量(bytes/s)`,
 		Run: func(cmd *cobra.Command, args []string) {
-			// Create an Amazon S3 service client
 			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
 
-			log.Println("Runing...Don't interrupt the program,if interrupted you must to manually delete cosbench-bucket")
+			log.Println("Runing...Don't interrupt the program,if interrupted you must to manually delete bucket")
 
 			if !notCreate {
 				_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
@@ -55,71 +48,82 @@ Bandwidth:平均每秒传输数据量(bytes/s)`,
 					log.Fatal(err)
 				}
 				defer func() {
-					client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+					_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 						Bucket: aws.String(bucketName),
 					})
+					if err != nil {
+						log.Println(bucketName + " DeleteBucket fail:" + err.Error())
+					}
 				}()
 			}
 
 			var (
 				uploadedObjSet  []string
 				uploadedDataSum uint64
-				responseTime    uint64 //平均响应时间
+				getDataSum      uint64
+				elapsedSum      uint64
 			)
-
 			var wg sync.WaitGroup
 			var lock sync.Mutex
 			timeArr := make([]uint64, objNum)
 
 			log.Println("Write...")
+			var (
+				opCount    uint64  //总操作数
+				success    int     //成功操作数
+				byteCount  uint64  //总传输数据量
+				avgResTime uint64  //平均响应时间
+				throughput float64 //平均每秒操作数
+				bandwidth  uint64  //平均每秒传输数据量
+			)
 			for i := uint64(0); i < objNum; i++ {
 				wg.Add(1)
 				go func(i uint64) {
 					defer wg.Done()
-					objectKey := OBJECTNAME + strconv.FormatUint(i, 10)
-					objData := make([]byte, rand.Int63n(int64(objSize)))
+					objKey, objData := GenerateObject(i, objMaxSize, objMinSize)
 					uploadedDataSum += uint64(len(objData))
-					rand.Read(objData)
-					reader := bytes.NewReader(objData)
 
 					//上传对象
 					t1 := time.Now()
 					_, err := client.PutObject(context.TODO(), &s3.PutObjectInput{
 						Bucket: aws.String(bucketName),
-						Key:    aws.String(objectKey),
-						Body:   reader,
+						Key:    aws.String(objKey),
+						Body:   bytes.NewReader(objData),
 					})
 					elapsed := time.Since(t1).Milliseconds()
 					timeArr[i] = uint64(elapsed)
 					if err != nil {
 						if isOutputErr {
-							log.Println(objectKey + " PutObject fail:" + err.Error())
+							log.Println(objKey + " PutObject fail:" + err.Error())
 						}
 						return
 					}
 					lock.Lock()
-					uploadedObjSet = append(uploadedObjSet, objectKey)
+					uploadedObjSet = append(uploadedObjSet, objKey)
 					lock.Unlock()
 				}(i)
 			}
 			wg.Wait()
 			for _, elapsed := range timeArr {
-				responseTime += elapsed
+				elapsedSum += elapsed
 			}
-			if responseTime/1000 == 0 {
-				log.Println("Op-count:", objNum, " Success:", len(uploadedObjSet), " Byte-count:", uploadedDataSum, " Avg-ResTime:", responseTime/objNum, "  Throughput:", objNum, " Bandwidth:", uploadedDataSum)
-
-			} else {
-				log.Println("Op-count:", objNum, " Success:", len(uploadedObjSet), " Byte-count:", uploadedDataSum, " Avg-ResTime:", responseTime/objNum, "  Throughput:", objNum/(responseTime/1000), " Bandwidth:", uploadedDataSum/(responseTime/1000))
-			}
+			opCount = objNum
+			success = len(uploadedObjSet)
+			byteCount = uploadedDataSum
+			avgResTime = elapsedSum / opCount
+			throughput = float64(opCount) * 1000 / float64(elapsedSum)
+			bandwidth = byteCount * 1000 / elapsedSum
+			log.Printf("Op-count:%v Success:%v Byte-count:%v Avg-ResTime:%v Throughput:%.2f Bandwidth:%v\n", opCount, success, byteCount, avgResTime, throughput, bandwidth)
 
 			log.Println("Read...")
-			var (
-				success    uint64
-				getDataSum uint64
-			)
-			responseTime = 0
+			elapsedSum = 0
 			timeArr = make([]uint64, len(uploadedObjSet))
+			opCount = 0
+			success = 0
+			byteCount = 0
+			avgResTime = 0
+			throughput = 0
+			bandwidth = 0
 			for i, objectKey := range uploadedObjSet {
 				wg.Add(1)
 				go func(index int, objectKey string) {
@@ -147,18 +151,22 @@ Bandwidth:平均每秒传输数据量(bytes/s)`,
 			}
 			wg.Wait()
 			for _, elapsed := range timeArr {
-				responseTime += elapsed
+				elapsedSum += elapsed
 			}
-			if responseTime/1000 == 0 {
-				log.Println("Op-count:", len(uploadedObjSet), " Success:", success, " Byte-count:", getDataSum, " Avg-ResTime:", responseTime/uint64(len(uploadedObjSet)), "  Throughput:", uint64(len(uploadedObjSet)), " Bandwidth:", getDataSum)
-			} else {
-				log.Println("Op-count:", len(uploadedObjSet), " Success:", success, " Byte-count:", getDataSum, " Avg-ResTime:", responseTime/uint64(len(uploadedObjSet)), "  Throughput:", uint64(len(uploadedObjSet))/(responseTime/1000), " Bandwidth:", getDataSum/(responseTime/1000))
-			}
+			opCount = uint64(len(uploadedObjSet))
+			byteCount = getDataSum
+			avgResTime = elapsedSum / opCount
+			throughput = float64(opCount) * 1000 / float64(elapsedSum)
+			bandwidth = byteCount * 1000 / elapsedSum
+			log.Printf("Op-count:%v Success:%v Byte-count:%v Avg-ResTime:%v Throughput:%.2f Bandwidth:%v\n", opCount, success, byteCount, avgResTime, throughput, bandwidth)
 
 			log.Println("Delete...")
-			responseTime = 0
-			success = 0
+			elapsedSum = 0
 			timeArr = make([]uint64, len(uploadedObjSet))
+			opCount = 0
+			success = 0
+			avgResTime = 0
+			throughput = 0
 			//删除上传对象
 			for i, objectKey := range uploadedObjSet {
 				wg.Add(1)
@@ -185,13 +193,12 @@ Bandwidth:平均每秒传输数据量(bytes/s)`,
 
 			wg.Wait()
 			for _, elapsed := range timeArr {
-				responseTime += elapsed
+				elapsedSum += elapsed
 			}
-			if responseTime/1000 == 0 {
-				log.Println("Op-count:", len(uploadedObjSet), " Success:", success, " Avg-ResTime:", responseTime/uint64(len(uploadedObjSet)), "  Throughput:", uint64(len(uploadedObjSet)))
-			} else {
-				log.Println("Op-count:", len(uploadedObjSet), " Success:", success, " Avg-ResTime:", responseTime/uint64(len(uploadedObjSet)), "  Throughput:", uint64(len(uploadedObjSet))/(responseTime/1000))
-			}
+			opCount = uint64(len(uploadedObjSet))
+			avgResTime = elapsedSum / opCount
+			throughput = float64(opCount) * 1000 / float64(elapsedSum)
+			log.Printf("Op-count:%v Success:%v Avg-ResTime:%v Throughput:%.2f\n", opCount, success, avgResTime, throughput)
 
 		},
 	}
@@ -201,7 +208,8 @@ Bandwidth:平均每秒传输数据量(bytes/s)`,
 	cmd.Flags().StringVarP(&secretKey, "secret_key", "s", "", "specify the secret_key")
 	cmd.Flags().StringVarP(&sessionToken, "session_token", "", "", "specify the session_token")
 	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 10000, "upload object num")
-	cmd.Flags().Uint64VarP(&objSize, "max_object_size", "", 1*1024*1024, "upload object max size")
+	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 1*1024*1024*1024, "upload object max size")
+	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
 	cmd.Flags().BoolVarP(&isOutputErr, "err", "e", false, "output err")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
 	cmd.Flags().BoolVarP(&notCreate, "create", "", false, "not create bucket")
