@@ -38,7 +38,7 @@ func buildCOSCheckCmd(parentCmd *cobra.Command) {
 
 			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
 
-			//如果为默认测试桶则创建,否则对已有特定桶进行测试
+			//是否创建桶
 			if !notCreate {
 				_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: aws.String(bucketName),
@@ -121,8 +121,8 @@ func buildCOSCheckCmd(parentCmd *cobra.Command) {
 	cmd.Flags().StringVarP(&accessKey, "access_key", "a", "", "specify the access_key")
 	cmd.Flags().StringVarP(&secretKey, "secret_key", "s", "", "specify the secret_key")
 	cmd.Flags().StringVarP(&sessionToken, "session_token", "", "", "specify the session_token")
-	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 10, "upload object num")
-	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 1*1024*1024*1024, "upload object max size")
+	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 100, "upload object num")
+	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 100*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
 	cmd.Flags().BoolVarP(&notCreate, "not_create", "", false, "not create bucket")
@@ -274,10 +274,10 @@ func buildCOSMultipartUploadCheckCmd(parentCmd *cobra.Command) {
 	cmd.Flags().StringVarP(&accessKey, "access_key", "a", "", "specify the access_key")
 	cmd.Flags().StringVarP(&secretKey, "secret_key", "s", "", "specify the secret_key")
 	cmd.Flags().StringVarP(&sessionToken, "session_token", "", "", "specify the session_token")
-	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 10, "upload object num")
-	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 4*1024*1024*1024, "upload object max size")
+	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 100, "upload object num")
+	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 100*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
-	cmd.Flags().Uint64VarP(&partSize, "partSize", "", 1*1024*1024*1024, "mutipartupload object partSize")
+	cmd.Flags().Uint64VarP(&partSize, "partSize", "", 25*1024*1024, "mutipartupload object partSize")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
 	cmd.Flags().BoolVarP(&notCreate, "not_create", "", false, "not create bucket")
 	cmd.MarkFlagRequired("access_key")
@@ -334,21 +334,21 @@ func buildCOSCheck2Cmd(parentCmd *cobra.Command) {
 
 			for i := uint64(0); i < objNum; i++ {
 				wgMain.Add(1)
-				go func(num uint64) {
+				go func(i uint64) {
 					defer wgMain.Done()
 					var wg sync.WaitGroup
 					var lock sync.Mutex
 					//保存上传成功对象数据,以确定最后是否存在与对象数据保持一致的原始数据
 					var dataArr [][]byte
-					objKey, _ := GenerateObject(num, 0, 0)
+					objKey, _ := GenerateObject(i, 0, 0)
 
 					//并发PutObject上传同名对象
 					for i := uint64(0); i < currencyValue; i++ {
 						wg.Add(1)
-						go func(num uint64) {
+						go func(objKey string) {
 							defer wg.Done()
 
-							objKey, objData := GenerateObject(num, objMaxSize, objMinSize)
+							_, objData := GenerateObject(0, objMaxSize, objMinSize)
 							//上传对象
 							_, err := client.PutObject(context.TODO(), &s3.PutObjectInput{
 								Bucket: aws.String(bucketName),
@@ -361,7 +361,7 @@ func buildCOSCheck2Cmd(parentCmd *cobra.Command) {
 							lock.Lock()
 							dataArr = append(dataArr, objData)
 							lock.Unlock()
-						}(num)
+						}(objKey)
 					}
 					wg.Wait()
 					if len(dataArr) == 0 {
@@ -417,7 +417,7 @@ func buildCOSCheck2Cmd(parentCmd *cobra.Command) {
 	cmd.Flags().StringVarP(&accessKey, "access_key", "a", "", "specify the access_key")
 	cmd.Flags().StringVarP(&secretKey, "secret_key", "s", "", "specify the secret_key")
 	cmd.Flags().StringVarP(&sessionToken, "session_token", "", "", "specify the session_token")
-	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 10, "upload object num")
+	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 100, "upload object num")
 	cmd.Flags().Uint64VarP(&currencyValue, "concurrency_value", "", 100, "same object key concurrency value")
 	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 1*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")

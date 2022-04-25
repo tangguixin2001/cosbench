@@ -3,8 +3,6 @@ package cmd
 import (
 	"context"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/spf13/cobra"
@@ -29,61 +27,122 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 		Run: func(cmd *cobra.Command, args []string) {
 			log.Println("Runing...")
 
-			customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-				return aws.Endpoint{
-					PartitionID:       "aws",
-					URL:               endpoints,
-					SigningRegion:     region,
-					HostnameImmutable: true,
-				}, nil
-			})
+			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
 
-			// Load the Shared AWS Configuration (~/.aws/config)
-			cfg, err := config.LoadDefaultConfig(
-				context.TODO(),
-				config.WithRegion(region),
-				config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)),
-				config.WithEndpointResolverWithOptions(customResolver),
-			)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			// Create an Amazon S3 service client
-			client := s3.NewFromConfig(cfg)
-
-			listObjectsV2Output, err := client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+			//获取桶的版本控制状态
+			getBucketVersioningOutput, err := client.GetBucketVersioning(context.TODO(), &s3.GetBucketVersioningInput{
 				Bucket: aws.String(bucketName),
 			})
 			if err != nil {
 				log.Fatal(err)
 			}
 
-			var wg sync.WaitGroup
-
-			if listObjectsV2Output.KeyCount > 0 {
-				for _, object := range listObjectsV2Output.Contents {
-					wg.Add(1)
-					go func(object types.Object) {
-						defer wg.Done()
-						_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
-							Bucket: aws.String(bucketName),
-							Key:    object.Key,
-						})
-						if err != nil {
-							log.Fatal(err)
-						}
-					}(object)
-				}
-			}
-			for listObjectsV2Output.IsTruncated {
-				listObjectsV2Output, err = client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
-					Bucket:            aws.String(bucketName),
-					ContinuationToken: listObjectsV2Output.NextContinuationToken,
+			if getBucketVersioningOutput.Status == "Enabled" {
+				listObjectVersionsOutput, err := client.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
+					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
 					log.Fatal(err)
 				}
+
+				var wg sync.WaitGroup
+
+				if len(listObjectVersionsOutput.Versions) > 0 {
+					for _, object := range listObjectVersionsOutput.Versions {
+						wg.Add(1)
+						go func(object types.ObjectVersion) {
+							defer wg.Done()
+							_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+								Bucket:    aws.String(bucketName),
+								Key:       object.Key,
+								VersionId: object.VersionId,
+							})
+							if err != nil {
+								log.Fatal(err)
+							}
+						}(object)
+					}
+				}
+				if len(listObjectVersionsOutput.DeleteMarkers) > 0 {
+					for _, object := range listObjectVersionsOutput.DeleteMarkers {
+						wg.Add(1)
+						go func(object types.DeleteMarkerEntry) {
+							defer wg.Done()
+							_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+								Bucket:    aws.String(bucketName),
+								Key:       object.Key,
+								VersionId: object.VersionId,
+							})
+							if err != nil {
+								log.Fatal(err)
+							}
+						}(object)
+					}
+				}
+
+				for listObjectVersionsOutput.IsTruncated {
+					listObjectVersionsOutput, err = client.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
+						Bucket:          aws.String(bucketName),
+						KeyMarker:       listObjectVersionsOutput.KeyMarker,
+						VersionIdMarker: listObjectVersionsOutput.VersionIdMarker,
+					})
+					if err != nil {
+						log.Fatal(err)
+					}
+					if len(listObjectVersionsOutput.Versions) > 0 {
+						for _, object := range listObjectVersionsOutput.Versions {
+							wg.Add(1)
+							go func(object types.ObjectVersion) {
+								defer wg.Done()
+								_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+									Bucket:    aws.String(bucketName),
+									Key:       object.Key,
+									VersionId: object.VersionId,
+								})
+								if err != nil {
+									log.Fatal(err)
+								}
+							}(object)
+						}
+					}
+					if len(listObjectVersionsOutput.DeleteMarkers) > 0 {
+						for _, object := range listObjectVersionsOutput.DeleteMarkers {
+							wg.Add(1)
+							go func(object types.DeleteMarkerEntry) {
+								defer wg.Done()
+								_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+									Bucket:    aws.String(bucketName),
+									Key:       object.Key,
+									VersionId: object.VersionId,
+								})
+								if err != nil {
+									log.Fatal(err)
+								}
+							}(object)
+						}
+					}
+				}
+
+				wg.Wait()
+
+				_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+					Bucket: aws.String(bucketName),
+				})
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				log.Println("complete")
+			} else if getBucketVersioningOutput.Status == "Suspended" {
+				listObjectsV2Output, err := client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+					Bucket: aws.String(bucketName),
+				})
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				var wg sync.WaitGroup
+
 				if listObjectsV2Output.KeyCount > 0 {
 					for _, object := range listObjectsV2Output.Contents {
 						wg.Add(1)
@@ -96,22 +155,49 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 							if err != nil {
 								log.Fatal(err)
 							}
-
 						}(object)
 					}
 				}
+				for listObjectsV2Output.IsTruncated {
+					listObjectsV2Output, err = client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+						Bucket:            aws.String(bucketName),
+						ContinuationToken: listObjectsV2Output.NextContinuationToken,
+					})
+					if err != nil {
+						log.Fatal(err)
+					}
+					if listObjectsV2Output.KeyCount > 0 {
+						for _, object := range listObjectsV2Output.Contents {
+							wg.Add(1)
+							go func(object types.Object) {
+								defer wg.Done()
+								_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+									Bucket: aws.String(bucketName),
+									Key:    object.Key,
+								})
+								if err != nil {
+									log.Fatal(err)
+								}
+
+							}(object)
+						}
+					}
+				}
+
+				wg.Wait()
+
+				_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+					Bucket: aws.String(bucketName),
+				})
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				log.Println("complete")
+			} else {
+				log.Println(bucketName, " GetBucketVersioningStatus error")
 			}
 
-			wg.Wait()
-
-			_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
-				Bucket: aws.String(bucketName),
-			})
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			log.Println("complete")
 		},
 	}
 	cmd.Flags().StringVarP(&endpoints, "endpoints", "p", "", "specify the endpoint")
