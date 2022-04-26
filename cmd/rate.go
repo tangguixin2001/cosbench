@@ -21,6 +21,7 @@ func buildCOSRateCmd(parentCmd *cobra.Command) {
 		objNum       uint64
 		objMaxSize   uint64
 		objMinSize   uint64
+		rateLimit    int
 		isOutputErr  bool
 		bucketName   string
 		notCreate    bool
@@ -36,19 +37,19 @@ Avg-ResTime:平均响应时间(ms)
 Throughput:每秒操作数
 Bandwidth:平均每秒传输数据量(bytes/s)`,
 		Run: func(cmd *cobra.Command, args []string) {
-			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
+			user := CreateS3User(endpoints, region, accessKey, secretKey, sessionToken, rateLimit)
 
 			log.Println("Runing...Don't interrupt the program,if interrupted you must to manually delete bucket")
 
 			if !notCreate {
-				_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				_, err := user.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
 					log.Fatal(err)
 				}
 				defer func() {
-					_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+					_, err = user.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 						Bucket: aws.String(bucketName),
 					})
 					if err != nil {
@@ -85,7 +86,7 @@ Bandwidth:平均每秒传输数据量(bytes/s)`,
 
 					//上传对象
 					t1 := time.Now()
-					_, err := client.PutObject(context.TODO(), &s3.PutObjectInput{
+					_, err := user.PutObject(context.TODO(), &s3.PutObjectInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objKey),
 						Body:   bytes.NewReader(objData),
@@ -130,7 +131,7 @@ Bandwidth:平均每秒传输数据量(bytes/s)`,
 					defer wg.Done()
 					//获取对象
 					t2 := time.Now()
-					getObjOutput, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
+					getObjOutput, err := user.GetObject(context.TODO(), &s3.GetObjectInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objectKey),
 					})
@@ -173,7 +174,7 @@ Bandwidth:平均每秒传输数据量(bytes/s)`,
 				go func(index int, objectKey string) {
 					defer wg.Done()
 					t3 := time.Now()
-					_, err := client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+					_, err := user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objectKey),
 					})
@@ -210,6 +211,7 @@ Bandwidth:平均每秒传输数据量(bytes/s)`,
 	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 100, "upload object num")
 	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 100*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
+	cmd.Flags().IntVarP(&rateLimit, "rate_limit", "", 100, "Max requests per second")
 	cmd.Flags().BoolVarP(&isOutputErr, "err", "e", false, "output err")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
 	cmd.Flags().BoolVarP(&notCreate, "create", "", false, "not create bucket")

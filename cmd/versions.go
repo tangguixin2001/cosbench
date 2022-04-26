@@ -36,6 +36,7 @@ func buildCOSVersionsCheckCmd(parentCmd *cobra.Command) {
 		objVersions  uint64
 		objMaxSize   uint64
 		objMinSize   uint64
+		rateLimit    int
 		success      uint64
 		bucketName   string
 		notCreate    bool
@@ -47,18 +48,18 @@ func buildCOSVersionsCheckCmd(parentCmd *cobra.Command) {
 		Run: func(cmd *cobra.Command, args []string) {
 			log.Println("Runing...")
 
-			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
+			user := CreateS3User(endpoints, region, accessKey, secretKey, sessionToken, rateLimit)
 
 			//是否创建桶
 			if !notCreate {
-				_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				_, err := user.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
 					log.Fatal(err)
 				}
 				defer func() {
-					_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+					_, err = user.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 						Bucket: aws.String(bucketName),
 					})
 					if err != nil {
@@ -66,7 +67,7 @@ func buildCOSVersionsCheckCmd(parentCmd *cobra.Command) {
 					}
 				}()
 				//开启版本控制
-				_, err = client.PutBucketVersioning(context.TODO(), &s3.PutBucketVersioningInput{
+				_, err = user.PutBucketVersioning(context.TODO(), &s3.PutBucketVersioningInput{
 					Bucket:                  aws.String(bucketName),
 					VersioningConfiguration: &types.VersioningConfiguration{Status: "Enabled"},
 				})
@@ -89,7 +90,7 @@ func buildCOSVersionsCheckCmd(parentCmd *cobra.Command) {
 							defer wg.Done()
 							_, objData := GenerateObject(0, objMaxSize, objMinSize)
 							//上传对象
-							putObjectOutput, err := client.PutObject(context.TODO(), &s3.PutObjectInput{
+							putObjectOutput, err := user.PutObject(context.TODO(), &s3.PutObjectInput{
 								Bucket: aws.String(bucketName),
 								Key:    aws.String(objKey),
 								Body:   bytes.NewReader(objData),
@@ -100,7 +101,7 @@ func buildCOSVersionsCheckCmd(parentCmd *cobra.Command) {
 							}
 							defer func() {
 								//删除对象指定版本
-								_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+								_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 									Bucket:    aws.String(bucketName),
 									Key:       aws.String(objKey),
 									VersionId: putObjectOutput.VersionId,
@@ -111,7 +112,7 @@ func buildCOSVersionsCheckCmd(parentCmd *cobra.Command) {
 							}()
 
 							//获取对象指定版本
-							getObjectOutput, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
+							getObjectOutput, err := user.GetObject(context.TODO(), &s3.GetObjectInput{
 								Bucket:    aws.String(bucketName),
 								Key:       aws.String(objKey),
 								VersionId: putObjectOutput.VersionId,
@@ -152,6 +153,7 @@ func buildCOSVersionsCheckCmd(parentCmd *cobra.Command) {
 	cmd.Flags().Uint64VarP(&objVersions, "max_object_versions", "", 100, "upload object versions")
 	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 1*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
+	cmd.Flags().IntVarP(&rateLimit, "rate_limit", "", 100, "Max requests per second")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
 	cmd.Flags().BoolVarP(&notCreate, "not_create", "", false, "not create bucket")
 	cmd.MarkFlagRequired("access_key")
@@ -172,6 +174,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 		objVersions  uint64
 		objMaxSize   uint64
 		objMinSize   uint64
+		rateLimit    int
 		bucketName   string
 		notCreate    bool
 	)
@@ -183,18 +186,18 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 			log.Println("Runing...")
 			isPass := true
 
-			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
+			user := CreateS3User(endpoints, region, accessKey, secretKey, sessionToken, rateLimit)
 
 			//是否创建桶
 			if !notCreate {
-				_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				_, err := user.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
 					log.Fatal(err)
 				}
 				defer func() {
-					_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+					_, err = user.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 						Bucket: aws.String(bucketName),
 					})
 					if err != nil {
@@ -202,7 +205,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 					}
 				}()
 				//开启版本控制
-				_, err = client.PutBucketVersioning(context.TODO(), &s3.PutBucketVersioningInput{
+				_, err = user.PutBucketVersioning(context.TODO(), &s3.PutBucketVersioningInput{
 					Bucket:                  aws.String(bucketName),
 					VersioningConfiguration: &types.VersioningConfiguration{Status: "Enabled"},
 				})
@@ -228,7 +231,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 							defer wg4PutObject.Done()
 							_, objData := GenerateObject(0, objMaxSize, objMinSize)
 							//上传对象
-							_, err := client.PutObject(context.TODO(), &s3.PutObjectInput{
+							_, err := user.PutObject(context.TODO(), &s3.PutObjectInput{
 								Bucket: aws.String(bucketName),
 								Key:    aws.String(objKey),
 								Body:   bytes.NewReader(objData),
@@ -241,7 +244,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 					wg4PutObject.Wait()
 
 					//插入删除标记
-					deleteObjectOutput, err := client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+					deleteObjectOutput, err := user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objKey),
 					})
@@ -251,7 +254,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 						return
 					}
 					//测试不指定版本号获取对象err是否为 404 no object found
-					_, err = client.GetObject(context.TODO(), &s3.GetObjectInput{
+					_, err = user.GetObject(context.TODO(), &s3.GetObjectInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objKey),
 					})
@@ -262,7 +265,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 					}
 
 					//删除deleteMarker
-					_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+					_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 						Bucket:    aws.String(bucketName),
 						Key:       aws.String(objKey),
 						VersionId: deleteObjectOutput.VersionId,
@@ -277,7 +280,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 			wg4PutObjectAll.Wait()
 
 			//通过ListObjectVersions获取对象全部版本并删除
-			listObjectVersionsOutput, err := client.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
+			listObjectVersionsOutput, err := user.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
 				Bucket: aws.String(bucketName),
 			})
 			if err != nil {
@@ -293,7 +296,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 						defer wg4GetObject.Done()
 						defer func(object types.ObjectVersion) {
 							//删除对象指定版本
-							_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+							_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 								Bucket:    aws.String(bucketName),
 								Key:       object.Key,
 								VersionId: object.VersionId,
@@ -303,7 +306,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 								isPass = false
 							}
 						}(object)
-						_, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
+						_, err := user.GetObject(context.TODO(), &s3.GetObjectInput{
 							Bucket:    aws.String(bucketName),
 							Key:       object.Key,
 							VersionId: object.VersionId,
@@ -321,7 +324,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 					wg4GetObject.Add(1)
 					go func(object types.DeleteMarkerEntry) {
 						defer wg4GetObject.Done()
-						_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+						_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 							Bucket:    aws.String(bucketName),
 							Key:       object.Key,
 							VersionId: object.VersionId,
@@ -335,7 +338,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 			}
 
 			for listObjectVersionsOutput.IsTruncated {
-				listObjectVersionsOutput, err = client.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
+				listObjectVersionsOutput, err = user.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
 					Bucket:          aws.String(bucketName),
 					KeyMarker:       listObjectVersionsOutput.KeyMarker,
 					VersionIdMarker: listObjectVersionsOutput.VersionIdMarker,
@@ -350,7 +353,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 							defer wg4GetObject.Done()
 							defer func(object types.ObjectVersion) {
 								//删除对象指定版本
-								_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+								_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 									Bucket:    aws.String(bucketName),
 									Key:       object.Key,
 									VersionId: object.VersionId,
@@ -360,7 +363,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 									isPass = false
 								}
 							}(object)
-							_, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
+							_, err := user.GetObject(context.TODO(), &s3.GetObjectInput{
 								Bucket:    aws.String(bucketName),
 								Key:       object.Key,
 								VersionId: object.VersionId,
@@ -378,7 +381,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 						wg4GetObject.Add(1)
 						go func(object types.DeleteMarkerEntry) {
 							defer wg4GetObject.Done()
-							_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+							_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 								Bucket:    aws.String(bucketName),
 								Key:       object.Key,
 								VersionId: object.VersionId,
@@ -405,6 +408,7 @@ func buildCOSVersionsCheck2Cmd(parentCmd *cobra.Command) {
 	cmd.Flags().Uint64VarP(&objVersions, "max_object_versions", "", 100, "upload object versions")
 	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 1*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
+	cmd.Flags().IntVarP(&rateLimit, "rate_limit", "", 100, "Max requests per second")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
 	cmd.Flags().BoolVarP(&notCreate, "not_create", "", false, "not create bucket")
 	cmd.MarkFlagRequired("access_key")

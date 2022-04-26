@@ -26,6 +26,7 @@ func buildCOSCheckCmd(parentCmd *cobra.Command) {
 		objMaxSize   uint64
 		objMinSize   uint64
 		success      uint64
+		rateLimit    int
 		bucketName   string
 		notCreate    bool
 	)
@@ -36,18 +37,18 @@ func buildCOSCheckCmd(parentCmd *cobra.Command) {
 		Run: func(cmd *cobra.Command, args []string) {
 			log.Println("Runing...")
 
-			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
+			user := CreateS3User(endpoints, region, accessKey, secretKey, sessionToken, rateLimit)
 
 			//是否创建桶
 			if !notCreate {
-				_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				_, err := user.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
 					log.Fatal(err)
 				}
 				defer func() {
-					_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+					_, err = user.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 						Bucket: aws.String(bucketName),
 					})
 					if err != nil {
@@ -66,7 +67,7 @@ func buildCOSCheckCmd(parentCmd *cobra.Command) {
 					objKey, objData := GenerateObject(i, objMaxSize, objMinSize)
 
 					//上传对象
-					_, err := client.PutObject(context.TODO(), &s3.PutObjectInput{
+					_, err := user.PutObject(context.TODO(), &s3.PutObjectInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objKey),
 						Body:   bytes.NewReader(objData),
@@ -77,7 +78,7 @@ func buildCOSCheckCmd(parentCmd *cobra.Command) {
 					}
 					defer func() {
 						//删除上传对象
-						_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+						_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 							Bucket: aws.String(bucketName),
 							Key:    aws.String(objKey),
 						})
@@ -87,7 +88,7 @@ func buildCOSCheckCmd(parentCmd *cobra.Command) {
 					}()
 
 					//获取对象
-					getObjectOutput, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
+					getObjectOutput, err := user.GetObject(context.TODO(), &s3.GetObjectInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objKey),
 					})
@@ -124,6 +125,7 @@ func buildCOSCheckCmd(parentCmd *cobra.Command) {
 	cmd.Flags().Uint64VarP(&objNum, "max_object_num", "", 100, "upload object num")
 	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 100*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
+	cmd.Flags().IntVarP(&rateLimit, "rate_limit", "", 100, "Max requests per second")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
 	cmd.Flags().BoolVarP(&notCreate, "not_create", "", false, "not create bucket")
 	cmd.MarkFlagRequired("access_key")
@@ -144,6 +146,7 @@ func buildCOSMultipartUploadCheckCmd(parentCmd *cobra.Command) {
 		objMaxSize   uint64
 		objMinSize   uint64
 		partSize     uint64
+		rateLimit    int
 		success      uint64
 		fail         uint64
 		bucketName   string
@@ -156,17 +159,17 @@ func buildCOSMultipartUploadCheckCmd(parentCmd *cobra.Command) {
 		Run: func(cmd *cobra.Command, args []string) {
 			log.Println("Runing...")
 
-			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
+			user := CreateS3User(endpoints, region, accessKey, secretKey, sessionToken, rateLimit)
 
 			if !notCreate {
-				_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				_, err := user.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
 					log.Fatal(err)
 				}
 				defer func() {
-					_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+					_, err = user.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 						Bucket: aws.String(bucketName),
 					})
 					if err != nil {
@@ -181,7 +184,7 @@ func buildCOSMultipartUploadCheckCmd(parentCmd *cobra.Command) {
 
 					//上传对象
 					//创建多块上传
-					createMultipartUploadOutput, err := client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+					createMultipartUploadOutput, err := user.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objKey),
 					})
@@ -203,7 +206,7 @@ func buildCOSMultipartUploadCheckCmd(parentCmd *cobra.Command) {
 						wg.Add(1)
 						go func(partId uint64, data []byte) {
 							defer wg.Done()
-							_, err = client.UploadPart(context.TODO(), &s3.UploadPartInput{
+							_, err = user.UploadPart(context.TODO(), &s3.UploadPartInput{
 								Bucket:     aws.String(bucketName),
 								Key:        aws.String(objKey),
 								UploadId:   uploadId,
@@ -219,7 +222,7 @@ func buildCOSMultipartUploadCheckCmd(parentCmd *cobra.Command) {
 
 					//完成多块上传
 					wg.Wait()
-					_, err = client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+					_, err = user.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
 						Bucket:   aws.String(bucketName),
 						Key:      aws.String(objKey),
 						UploadId: uploadId,
@@ -231,7 +234,7 @@ func buildCOSMultipartUploadCheckCmd(parentCmd *cobra.Command) {
 					}
 					defer func() {
 						//删除上传对象
-						_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+						_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 							Bucket: aws.String(bucketName),
 							Key:    aws.String(objKey),
 						})
@@ -241,7 +244,7 @@ func buildCOSMultipartUploadCheckCmd(parentCmd *cobra.Command) {
 					}()
 
 					//获取对象
-					getObjectOutput, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
+					getObjectOutput, err := user.GetObject(context.TODO(), &s3.GetObjectInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objKey),
 					})
@@ -278,6 +281,7 @@ func buildCOSMultipartUploadCheckCmd(parentCmd *cobra.Command) {
 	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 100*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
 	cmd.Flags().Uint64VarP(&partSize, "partSize", "", 25*1024*1024, "mutipartupload object partSize")
+	cmd.Flags().IntVarP(&rateLimit, "rate_limit", "", 100, "Max requests per second")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
 	cmd.Flags().BoolVarP(&notCreate, "not_create", "", false, "not create bucket")
 	cmd.MarkFlagRequired("access_key")
@@ -298,6 +302,7 @@ func buildCOSCheck2Cmd(parentCmd *cobra.Command) {
 		currencyValue uint64
 		objMaxSize    uint64
 		objMinSize    uint64
+		rateLimit     int
 		bucketName    string
 		notCreate     bool
 	)
@@ -308,18 +313,18 @@ func buildCOSCheck2Cmd(parentCmd *cobra.Command) {
 		Run: func(cmd *cobra.Command, args []string) {
 			log.Println("Runing...")
 
-			// Create an Amazon S3 service client
-			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
+			// Create an Amazon S3 service user
+			user := CreateS3User(endpoints, region, accessKey, secretKey, sessionToken, rateLimit)
 
 			if !notCreate {
-				_, err := client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
+				_, err := user.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
 					log.Fatal(err)
 				}
 				defer func() {
-					_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+					_, err = user.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 						Bucket: aws.String(bucketName),
 					})
 					if err != nil {
@@ -350,7 +355,7 @@ func buildCOSCheck2Cmd(parentCmd *cobra.Command) {
 
 							_, objData := GenerateObject(0, objMaxSize, objMinSize)
 							//上传对象
-							_, err := client.PutObject(context.TODO(), &s3.PutObjectInput{
+							_, err := user.PutObject(context.TODO(), &s3.PutObjectInput{
 								Bucket: aws.String(bucketName),
 								Key:    aws.String(objKey),
 								Body:   bytes.NewReader(objData),
@@ -371,7 +376,7 @@ func buildCOSCheck2Cmd(parentCmd *cobra.Command) {
 
 					defer func() {
 						//删除上传对象
-						_, err := client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+						_, err := user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 							Bucket: aws.String(bucketName),
 							Key:    aws.String(objKey),
 						})
@@ -382,7 +387,7 @@ func buildCOSCheck2Cmd(parentCmd *cobra.Command) {
 
 					//GetObject获取数据与PutObject上传成功数据块匹配个数
 					isSuccess := false
-					getObjectOutput, err := client.GetObject(context.TODO(), &s3.GetObjectInput{
+					getObjectOutput, err := user.GetObject(context.TODO(), &s3.GetObjectInput{
 						Bucket: aws.String(bucketName),
 						Key:    aws.String(objKey),
 					})
@@ -421,6 +426,7 @@ func buildCOSCheck2Cmd(parentCmd *cobra.Command) {
 	cmd.Flags().Uint64VarP(&currencyValue, "concurrency_value", "", 100, "same object key concurrency value")
 	cmd.Flags().Uint64VarP(&objMaxSize, "max_object_size", "", 1*1024*1024, "upload object max size")
 	cmd.Flags().Uint64VarP(&objMinSize, "min_object_size", "", 0, "upload object min size")
+	cmd.Flags().IntVarP(&rateLimit, "rate_limit", "", 100, "Max requests per second")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "specify the bucket")
 	cmd.Flags().BoolVarP(&notCreate, "not_create", "", false, "not create bucket")
 	cmd.MarkFlagRequired("access_key")

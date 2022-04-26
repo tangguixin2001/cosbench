@@ -19,6 +19,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 		secretKey    string
 		sessionToken string
 		bucketName   string
+		rateLimit    int
 	)
 
 	var cmd = &cobra.Command{
@@ -27,18 +28,18 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 		Run: func(cmd *cobra.Command, args []string) {
 			log.Println("Runing...")
 
-			client := CreateS3Client(endpoints, region, accessKey, secretKey, sessionToken)
+			user := CreateS3User(endpoints, region, accessKey, secretKey, sessionToken, rateLimit)
 
 			//获取桶的版本控制状态
-			getBucketVersioningOutput, err := client.GetBucketVersioning(context.TODO(), &s3.GetBucketVersioningInput{
+			getBucketVersioningOutput, err := user.GetBucketVersioning(context.TODO(), &s3.GetBucketVersioningInput{
 				Bucket: aws.String(bucketName),
 			})
 			if err != nil {
 				log.Fatal(err)
 			}
 
-			if getBucketVersioningOutput.Status == "Enabled" {
-				listObjectVersionsOutput, err := client.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
+			if getBucketVersioningOutput.Status == "Enabled" || getBucketVersioningOutput.Status == "Suspended" {
+				listObjectVersionsOutput, err := user.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
@@ -52,7 +53,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 						wg.Add(1)
 						go func(object types.ObjectVersion) {
 							defer wg.Done()
-							_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+							_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 								Bucket:    aws.String(bucketName),
 								Key:       object.Key,
 								VersionId: object.VersionId,
@@ -68,7 +69,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 						wg.Add(1)
 						go func(object types.DeleteMarkerEntry) {
 							defer wg.Done()
-							_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+							_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 								Bucket:    aws.String(bucketName),
 								Key:       object.Key,
 								VersionId: object.VersionId,
@@ -81,7 +82,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 				}
 
 				for listObjectVersionsOutput.IsTruncated {
-					listObjectVersionsOutput, err = client.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
+					listObjectVersionsOutput, err = user.ListObjectVersions(context.TODO(), &s3.ListObjectVersionsInput{
 						Bucket:          aws.String(bucketName),
 						KeyMarker:       listObjectVersionsOutput.KeyMarker,
 						VersionIdMarker: listObjectVersionsOutput.VersionIdMarker,
@@ -94,7 +95,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 							wg.Add(1)
 							go func(object types.ObjectVersion) {
 								defer wg.Done()
-								_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+								_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 									Bucket:    aws.String(bucketName),
 									Key:       object.Key,
 									VersionId: object.VersionId,
@@ -110,7 +111,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 							wg.Add(1)
 							go func(object types.DeleteMarkerEntry) {
 								defer wg.Done()
-								_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+								_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 									Bucket:    aws.String(bucketName),
 									Key:       object.Key,
 									VersionId: object.VersionId,
@@ -125,7 +126,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 
 				wg.Wait()
 
-				_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+				_, err = user.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
@@ -133,8 +134,8 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 				}
 
 				log.Println("complete")
-			} else if getBucketVersioningOutput.Status == "Suspended" {
-				listObjectsV2Output, err := client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+			} else if getBucketVersioningOutput.Status == "" {
+				listObjectsV2Output, err := user.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
@@ -148,7 +149,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 						wg.Add(1)
 						go func(object types.Object) {
 							defer wg.Done()
-							_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+							_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 								Bucket: aws.String(bucketName),
 								Key:    object.Key,
 							})
@@ -159,7 +160,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 					}
 				}
 				for listObjectsV2Output.IsTruncated {
-					listObjectsV2Output, err = client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+					listObjectsV2Output, err = user.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
 						Bucket:            aws.String(bucketName),
 						ContinuationToken: listObjectsV2Output.NextContinuationToken,
 					})
@@ -171,7 +172,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 							wg.Add(1)
 							go func(object types.Object) {
 								defer wg.Done()
-								_, err = client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+								_, err = user.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
 									Bucket: aws.String(bucketName),
 									Key:    object.Key,
 								})
@@ -186,7 +187,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 
 				wg.Wait()
 
-				_, err = client.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
+				_, err = user.DeleteBucket(context.TODO(), &s3.DeleteBucketInput{
 					Bucket: aws.String(bucketName),
 				})
 				if err != nil {
@@ -206,6 +207,7 @@ func buildCOSClearCmd(parentCmd *cobra.Command) {
 	cmd.Flags().StringVarP(&secretKey, "secret_key", "s", "", "specify the secret_key")
 	cmd.Flags().StringVarP(&sessionToken, "session_token", "", "", "specify the session_token")
 	cmd.Flags().StringVarP(&bucketName, "bucket", "b", "cosbench-bucket", "clear other bucket")
+	cmd.Flags().IntVarP(&rateLimit, "rate_limit", "", 100, "Max requests per second")
 	cmd.MarkFlagRequired("access_key")
 	cmd.MarkFlagRequired("secret_key")
 	cmd.MarkFlagRequired("endpoints")
